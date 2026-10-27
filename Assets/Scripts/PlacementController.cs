@@ -7,6 +7,7 @@ using UnityEngine.InputSystem;
 /// Fixed isometric map + a piece strip at the bottom of the screen.
 /// Milestone 1: hover highlight, click to place a 1x1 piece.
 /// Milestone 2: strip of 10 pieces (first 3 selectable), 3 piece types, queue shifts when a piece is used.
+/// Milestone 3: game over when none of the 3 available pieces has a legal cell; R restarts.
 /// Everything is built at runtime, so no art assets are needed.
 /// The strip is drawn with IMGUI (OnGUI) as a temporary UI layer; the queue logic lives in PieceQueue.
 /// Works with the old Input Manager and the new Input System (picked at compile time).
@@ -36,6 +37,9 @@ public class PlacementController : MonoBehaviour
     [SerializeField] Color cardWaitingColor = new Color(0.98f, 0.93f, 0.82f, 0.45f);
     [SerializeField] Color selectedBorderColor = new Color(0.98f, 0.78f, 0.25f);
 
+    [Header("Game over")]
+    [SerializeField] Color gameOverOverlayColor = new Color(0.20f, 0.14f, 0.10f, 0.60f);
+
     const float TileWidth = 1f;
     const float TileHeight = 0.5f;
     const int QueueCapacity = 10;
@@ -44,9 +48,11 @@ public class PlacementController : MonoBehaviour
     IsoGrid grid;
     PieceQueue queue;
     int selectedSlot;
+    bool gameOver;
 
     Sprite diamond;
     Texture2D roundedTex;
+    Transform piecesRoot;
     SpriteRenderer hover;
     Camera cam;
     Vector2Int hoveredCell;
@@ -59,6 +65,8 @@ public class PlacementController : MonoBehaviour
     readonly Rect[] slotRects = new Rect[QueueCapacity];
     GUIStyle keyStyle;
     GUIStyle debugStyle;
+    GUIStyle titleStyle;
+    GUIStyle subtitleStyle;
 
     void Awake()
     {
@@ -67,6 +75,8 @@ public class PlacementController : MonoBehaviour
         diamond = CreateDiamondSprite();
         roundedTex = CreateRoundedSquareTexture();
         BuildGround();
+        piecesRoot = new GameObject("Pieces").transform;
+        piecesRoot.SetParent(transform, false);
         hover = CreateSprite("Hover", Vector3.zero, Color.white, 500, 1f);
         hover.gameObject.SetActive(false);
     }
@@ -93,6 +103,15 @@ public class PlacementController : MonoBehaviour
             lastScreenSize = new Vector2Int(Screen.width, Screen.height);
             ComputeStripLayout();
             SetupCamera();
+        }
+
+        if (PressedRestartKey()) RestartGame();
+
+        if (gameOver)
+        {
+            hasHover = false;
+            hover.gameObject.SetActive(false);
+            return;
         }
 
         Vector2 pointer = PointerPosition();
@@ -123,8 +142,9 @@ public class PlacementController : MonoBehaviour
         hover.gameObject.SetActive(hasHover);
         if (!hasHover) return;
 
-        bool canPlace = grid.CanPlace(hoveredCell);
-        Color pieceColor = ColorOf(queue.Peek(selectedSlot));
+        PieceType selectedType = queue.Peek(selectedSlot);
+        bool canPlace = IsLegal(hoveredCell, selectedType);
+        Color pieceColor = ColorOf(selectedType);
         hover.transform.position = grid.CellToWorld(hoveredCell);
         hover.color = canPlace ? new Color(pieceColor.r, pieceColor.g, pieceColor.b, 0.7f) : invalidHoverColor;
 
@@ -134,7 +154,44 @@ public class PlacementController : MonoBehaviour
             grid.TryPlace(hoveredCell);
             SpawnPiece(hoveredCell, placed);
             placedCount++;
+
+            if (!HasLegalMove()) gameOver = true;
         }
+    }
+
+    // ---------- rules ----------
+
+    /// <summary>
+    /// The single place that decides if a piece may go on a cell.
+    /// For now any free cell is legal; per-type rules will be added here later.
+    /// </summary>
+    bool IsLegal(Vector2Int cell, PieceType type)
+    {
+        return grid.CanPlace(cell);
+    }
+
+    /// <summary>True if at least one of the currently available pieces can be placed somewhere.</summary>
+    bool HasLegalMove()
+    {
+        for (int slot = 0; slot < ActiveCount; slot++)
+        {
+            PieceType type = queue.Peek(slot);
+            for (int x = 0; x < width; x++)
+                for (int y = 0; y < height; y++)
+                    if (IsLegal(new Vector2Int(x, y), type)) return true;
+        }
+        return false;
+    }
+
+    void RestartGame()
+    {
+        grid = new IsoGrid(width, height, TileWidth, TileHeight);
+        queue = new PieceQueue(QueueCapacity, ActiveCount);
+        for (int i = piecesRoot.childCount - 1; i >= 0; i--)
+            Destroy(piecesRoot.GetChild(i).gameObject);
+        selectedSlot = 0;
+        placedCount = 0;
+        gameOver = false;
     }
 
     // ---------- building the scene ----------
@@ -159,7 +216,7 @@ public class PlacementController : MonoBehaviour
     {
         // Higher x+y = closer to the viewer = drawn on top.
         var sr = CreateSprite($"{type}_{cell.x}_{cell.y}", grid.CellToWorld(cell), ColorOf(type), 10 + cell.x + cell.y, 0.8f);
-        sr.transform.SetParent(transform, true);
+        sr.transform.SetParent(piecesRoot, true);
     }
 
     Color ColorOf(PieceType type)
@@ -258,6 +315,10 @@ public class PlacementController : MonoBehaviour
             keyStyle.normal.textColor = new Color(0.36f, 0.25f, 0.18f);
             debugStyle = new GUIStyle(GUI.skin.label) { fontSize = 18, fontStyle = FontStyle.Bold };
             debugStyle.normal.textColor = new Color(0.25f, 0.2f, 0.15f);
+            titleStyle = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
+            titleStyle.normal.textColor = new Color(0.98f, 0.93f, 0.82f);
+            subtitleStyle = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
+            subtitleStyle.normal.textColor = new Color(0.98f, 0.93f, 0.82f);
         }
 
         // Panel + light top edge.
@@ -270,7 +331,7 @@ public class PlacementController : MonoBehaviour
         {
             Rect r = slotRects[i];
             bool active = i < ActiveCount;
-            bool selected = active && i == selectedSlot;
+            bool selected = active && i == selectedSlot && !gameOver;
             if (selected) r.y -= r.height * 0.10f; // selected card is raised
 
             if (selected)
@@ -290,9 +351,22 @@ public class PlacementController : MonoBehaviour
                 GUI.Label(new Rect(r.x + r.width * 0.08f, r.y + r.height * 0.03f, r.width * 0.4f, r.height * 0.3f), (i + 1).ToString(), keyStyle);
         }
 
+        // Game over overlay: dims everything and shows the result.
+        if (gameOver)
+        {
+            float sw = Screen.width;
+            float sh = Screen.height;
+            float cy = panelRect.y * 0.5f; // center of the map area
+            DrawRect(new Rect(0f, 0f, sw, sh), gameOverOverlayColor);
+            titleStyle.fontSize = Mathf.RoundToInt(sh * 0.09f);
+            subtitleStyle.fontSize = Mathf.RoundToInt(sh * 0.035f);
+            GUI.Label(new Rect(0f, cy - sh * 0.09f, sw, sh * 0.12f), "Game over", titleStyle);
+            GUI.Label(new Rect(0f, cy + sh * 0.03f, sw, sh * 0.06f), $"Pieces placed: {placedCount}   -   press R to restart", subtitleStyle);
+        }
+
         // Temporary debug readout, remove when real UI exists.
         string cellText = hasHover ? $"({hoveredCell.x}, {hoveredCell.y})" : "-";
-        GUI.Label(new Rect(10, 10, 500, 30), $"Cell: {cellText}   Placed: {placedCount}", debugStyle);
+        GUI.Label(new Rect(10, 10, 600, 30), $"Cell: {cellText}   Placed: {placedCount}   (R = restart)", debugStyle);
     }
 
     static void DrawRect(Rect r, Color c)
@@ -399,6 +473,15 @@ public class PlacementController : MonoBehaviour
         if (Input.GetKeyDown(KeyCode.Alpha2)) return 1;
         if (Input.GetKeyDown(KeyCode.Alpha3)) return 2;
         return -1;
+#endif
+    }
+
+    static bool PressedRestartKey()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.R);
 #endif
     }
 }
