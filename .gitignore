@@ -63,3 +63,5 @@ crashlytics-build.properties
 
 # UserSettings
 UserSettings/*
+# Generated IDE solution
+*.slnx
