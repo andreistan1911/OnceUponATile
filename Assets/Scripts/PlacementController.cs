@@ -23,7 +23,8 @@ public class PlacementController : MonoBehaviour
     [Header("Map colors")]
     [SerializeField] Color groundColorA = new Color(0.66f, 0.82f, 0.52f);
     [SerializeField] Color groundColorB = new Color(0.60f, 0.77f, 0.47f);
-    [SerializeField] Color invalidHoverColor = new Color(1f, 0.2f, 0.2f, 0.65f);
+    [SerializeField] Color blockedHoverColor = new Color(0.70f, 0.10f, 0.20f, 0.85f);
+    [SerializeField] Color blockedMarkColor = new Color(1f, 1f, 1f, 0.95f);
     [SerializeField] Color backgroundColor = new Color(0.98f, 0.93f, 0.82f);
 
     [Header("Piece colors")]
@@ -54,8 +55,10 @@ public class PlacementController : MonoBehaviour
 
     Sprite diamond;
     Texture2D roundedTex;
+    Sprite crossSprite;
     Transform piecesRoot;
     SpriteRenderer hover;
+    SpriteRenderer blockedMark;
     Camera cam;
     Vector2Int hoveredCell;
     bool hasHover;
@@ -80,6 +83,10 @@ public class PlacementController : MonoBehaviour
         piecesRoot.SetParent(transform, false);
         hover = CreateSprite("Hover", Vector3.zero, Color.white, 500, 1f);
         hover.gameObject.SetActive(false);
+        crossSprite = CreateCrossSprite();
+        blockedMark = CreateSprite("BlockedMark", Vector3.zero, blockedMarkColor, 501, 1f);
+        blockedMark.sprite = crossSprite;
+        blockedMark.gameObject.SetActive(false);
         StartNewGame();
     }
 
@@ -111,8 +118,7 @@ public class PlacementController : MonoBehaviour
 
         if (gameOver)
         {
-            hasHover = false;
-            hover.gameObject.SetActive(false);
+            HideHover();
             return;
         }
 
@@ -126,8 +132,7 @@ public class PlacementController : MonoBehaviour
         // Pointer over the strip: select a piece, never touch the map.
         if (panelRect.Contains(guiPointer))
         {
-            hasHover = false;
-            hover.gameObject.SetActive(false);
+            HideHover();
             if (click)
             {
                 for (int i = 0; i < ActiveCount; i++)
@@ -141,14 +146,24 @@ public class PlacementController : MonoBehaviour
         hoveredCell = grid.WorldToCell(world);
         hasHover = grid.InBounds(hoveredCell);
 
-        hover.gameObject.SetActive(hasHover);
-        if (!hasHover) return;
+        if (!hasHover)
+        {
+            HideHover();
+            return;
+        }
 
         PieceType selectedType = queue.Peek(selectedSlot);
         bool canPlace = IsLegal(hoveredCell, selectedType);
         Color pieceColor = ColorOf(selectedType);
-        hover.transform.position = grid.CellToWorld(hoveredCell);
-        hover.color = canPlace ? new Color(pieceColor.r, pieceColor.g, pieceColor.b, 0.7f) : invalidHoverColor;
+        Vector3 cellPos = grid.CellToWorld(hoveredCell);
+
+        hover.gameObject.SetActive(true);
+        hover.transform.position = cellPos;
+        hover.color = canPlace ? new Color(pieceColor.r, pieceColor.g, pieceColor.b, 0.7f) : blockedHoverColor;
+
+        // Blocked cells also get a white X, so the state never depends on color alone.
+        blockedMark.gameObject.SetActive(!canPlace);
+        blockedMark.transform.position = cellPos;
 
         if (canPlace && click)
         {
@@ -159,6 +174,13 @@ public class PlacementController : MonoBehaviour
 
             if (!HasLegalMove()) gameOver = true;
         }
+    }
+
+    void HideHover()
+    {
+        hasHover = false;
+        hover.gameObject.SetActive(false);
+        blockedMark.gameObject.SetActive(false);
     }
 
     // ---------- rules ----------
@@ -432,6 +454,43 @@ public class PlacementController : MonoBehaviour
         tex.SetPixels32(px);
         tex.Apply();
         return Sprite.Create(tex, new Rect(0, 0, w, h), new Vector2(0.5f, 0.5f), 128f);
+    }
+
+    /// <summary>
+    /// Generates a 128x64 transparent sprite with a bold X in the middle (it fits inside the diamond).
+    /// Same size as the diamond sprite; shown on cells where the selected piece cannot be placed.
+    /// </summary>
+    static Sprite CreateCrossSprite()
+    {
+        const int w = 128, h = 64;
+        const float halfThickness = 3f;
+        var tex = new Texture2D(w, h, TextureFormat.RGBA32, false)
+        {
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        var px = new Color32[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                float d1 = DistToSegment(x + 0.5f, y + 0.5f, 48f, 16f, 80f, 48f);
+                float d2 = DistToSegment(x + 0.5f, y + 0.5f, 48f, 48f, 80f, 16f);
+                float alpha = Mathf.Clamp01(halfThickness - Mathf.Min(d1, d2) + 0.5f);
+                px[y * w + x] = new Color32(255, 255, 255, (byte)(alpha * 255f));
+            }
+        }
+        tex.SetPixels32(px);
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, w, h), new Vector2(0.5f, 0.5f), 128f);
+    }
+
+    static float DistToSegment(float px, float py, float ax, float ay, float bx, float by)
+    {
+        float abx = bx - ax, aby = by - ay;
+        float t = Mathf.Clamp01(((px - ax) * abx + (py - ay) * aby) / (abx * abx + aby * aby));
+        float cx = ax + t * abx, cy = ay + t * aby;
+        return Mathf.Sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy));
     }
 
     /// <summary>White 64x64 rounded square, used (tinted) for the strip cards.</summary>
