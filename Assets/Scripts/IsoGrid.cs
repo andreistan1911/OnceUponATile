@@ -1,7 +1,7 @@
 using UnityEngine;
 
 /// <summary>
-/// Pure grid logic: occupancy + conversion between grid cells and world positions.
+/// Pure grid logic: which piece (if any) is on each cell + conversion between grid cells and world positions.
 /// No MonoBehaviour, no visuals. Standard 2:1 isometric layout.
 /// Cell (0,0) is the bottom corner of the diamond; +x goes up-right, +y goes up-left.
 /// </summary>
@@ -12,7 +12,7 @@ public class IsoGrid
     public readonly float TileWidth;   // world width of one diamond
     public readonly float TileHeight;  // world height of one diamond (usually half of width)
 
-    readonly bool[,] occupied;
+    readonly PieceType?[,] pieces;     // null = free cell
 
     public IsoGrid(int width, int height, float tileWidth = 1f, float tileHeight = 0.5f)
     {
@@ -20,21 +20,43 @@ public class IsoGrid
         Height = height;
         TileWidth = tileWidth;
         TileHeight = tileHeight;
-        occupied = new bool[width, height];
+        pieces = new PieceType?[width, height];
     }
 
     public bool InBounds(Vector2Int c) => c.x >= 0 && c.y >= 0 && c.x < Width && c.y < Height;
 
-    public bool IsOccupied(Vector2Int c) => InBounds(c) && occupied[c.x, c.y];
+    public bool IsOccupied(Vector2Int c) => InBounds(c) && pieces[c.x, c.y].HasValue;
 
-    public bool CanPlace(Vector2Int c) => InBounds(c) && !occupied[c.x, c.y];
+    /// <summary>True if the cell exists and is free. Says nothing about placement rules.</summary>
+    public bool CanPlace(Vector2Int c) => InBounds(c) && !pieces[c.x, c.y].HasValue;
 
-    /// <summary>Marks the cell as occupied. Returns false (and changes nothing) if illegal.</summary>
-    public bool TryPlace(Vector2Int c)
+    /// <summary>The piece on a cell, or null if the cell is free or out of bounds.</summary>
+    public PieceType? GetPiece(Vector2Int c) => InBounds(c) ? pieces[c.x, c.y] : null;
+
+    /// <summary>Puts a piece on the cell. Returns false (and changes nothing) if the cell is not free.</summary>
+    public bool TryPlace(Vector2Int c, PieceType type)
     {
         if (!CanPlace(c)) return false;
-        occupied[c.x, c.y] = true;
+        pieces[c.x, c.y] = type;
         return true;
+    }
+
+    /// <summary>True if one of the 4 side neighbours of the cell holds a piece of the given type.</summary>
+    public bool HasNeighbor(Vector2Int c, PieceType type)
+    {
+        return IsType(c.x + 1, c.y, type) || IsType(c.x - 1, c.y, type)
+            || IsType(c.x, c.y + 1, type) || IsType(c.x, c.y - 1, type);
+    }
+
+    /// <summary>Empties the whole grid.</summary>
+    public void Clear()
+    {
+        System.Array.Clear(pieces, 0, pieces.Length);
+    }
+
+    bool IsType(int x, int y, PieceType type)
+    {
+        return x >= 0 && y >= 0 && x < Width && y < Height && pieces[x, y] == type;
     }
 
     /// <summary>World position of the center of a cell.</summary>

@@ -8,6 +8,8 @@ using UnityEngine.InputSystem;
 /// Milestone 1: hover highlight, click to place a 1x1 piece.
 /// Milestone 2: strip of 10 pieces (first 3 selectable), 3 piece types, queue shifts when a piece is used.
 /// Milestone 3: game over when none of the 3 available pieces has a legal cell; R restarts.
+/// Milestone 4: placement rules (road: anywhere, house: next to a road, park: next to a house)
+///              and a starter road in the middle of the map.
 /// Everything is built at runtime, so no art assets are needed.
 /// The strip is drawn with IMGUI (OnGUI) as a temporary UI layer; the queue logic lives in PieceQueue.
 /// Works with the old Input Manager and the new Input System (picked at compile time).
@@ -71,7 +73,6 @@ public class PlacementController : MonoBehaviour
     void Awake()
     {
         grid = new IsoGrid(width, height, TileWidth, TileHeight);
-        queue = new PieceQueue(QueueCapacity, ActiveCount);
         diamond = CreateDiamondSprite();
         roundedTex = CreateRoundedSquareTexture();
         BuildGround();
@@ -79,6 +80,7 @@ public class PlacementController : MonoBehaviour
         piecesRoot.SetParent(transform, false);
         hover = CreateSprite("Hover", Vector3.zero, Color.white, 500, 1f);
         hover.gameObject.SetActive(false);
+        StartNewGame();
     }
 
     void Start()
@@ -151,7 +153,7 @@ public class PlacementController : MonoBehaviour
         if (canPlace && click)
         {
             PieceType placed = queue.Take(selectedSlot);
-            grid.TryPlace(hoveredCell);
+            grid.TryPlace(hoveredCell, placed);
             SpawnPiece(hoveredCell, placed);
             placedCount++;
 
@@ -163,11 +165,19 @@ public class PlacementController : MonoBehaviour
 
     /// <summary>
     /// The single place that decides if a piece may go on a cell.
-    /// For now any free cell is legal; per-type rules will be added here later.
+    ///   Road : any free cell.
+    ///   House: a free cell with a road on one of its 4 sides.
+    ///   Park : a free cell with a house on one of its 4 sides.
     /// </summary>
     bool IsLegal(Vector2Int cell, PieceType type)
     {
-        return grid.CanPlace(cell);
+        if (!grid.CanPlace(cell)) return false;
+        switch (type)
+        {
+            case PieceType.Road: return true;
+            case PieceType.House: return grid.HasNeighbor(cell, PieceType.Road);
+            default: return grid.HasNeighbor(cell, PieceType.House); // Park
+        }
     }
 
     /// <summary>True if at least one of the currently available pieces can be placed somewhere.</summary>
@@ -183,15 +193,29 @@ public class PlacementController : MonoBehaviour
         return false;
     }
 
-    void RestartGame()
+    /// <summary>Empties the map, puts the starter road in the middle and deals a first queue that allows a move.</summary>
+    void StartNewGame()
     {
-        grid = new IsoGrid(width, height, TileWidth, TileHeight);
+        grid.Clear();
+        var start = new Vector2Int(width / 2, height / 2);
+        grid.TryPlace(start, PieceType.Road);
+        SpawnPiece(start, PieceType.Road);
+
+        // The first 3 pieces must allow at least one move (e.g. not three parks).
         queue = new PieceQueue(QueueCapacity, ActiveCount);
-        for (int i = piecesRoot.childCount - 1; i >= 0; i--)
-            Destroy(piecesRoot.GetChild(i).gameObject);
+        for (int i = 0; i < 100 && !HasLegalMove(); i++)
+            queue = new PieceQueue(QueueCapacity, ActiveCount);
+
         selectedSlot = 0;
         placedCount = 0;
         gameOver = false;
+    }
+
+    void RestartGame()
+    {
+        for (int i = piecesRoot.childCount - 1; i >= 0; i--)
+            Destroy(piecesRoot.GetChild(i).gameObject);
+        StartNewGame();
     }
 
     // ---------- building the scene ----------
